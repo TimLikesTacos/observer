@@ -3,4 +3,10 @@ name = "observer"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+async = ["futures", "async-trait"]
+
 [dependencies]
+futures = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
