@@ -12,16 +12,26 @@ pub mod asyn;
 #[cfg(feature = "async")]
 pub use crate::asyn::*;
 
-#[cfg(not(feature = "async"))]
+/// Reexport async trait as it's needed to implement the ObserverAsync trait
+#[cfg(feature = "async")]
+pub use async_trait::async_trait;
+
 pub use crate::sync::*;
 
-#[cfg(not(feature = "async"))]
 mod sync {
+
     use std::cell::RefCell;
+    //use std::rc::{Rc, Weak as RcWeak};
     use std::sync::{Arc, Weak};
+
+    // enum Mutability<E> {
+    //     Mutable(Rc<RefCell<dyn Observer<E>>>),
+    //     Immutable(Rc<dyn Observer<E>>),
+    // }
 
     pub trait Observable<E> {
         fn register_observer(&mut self, event: Arc<RefCell<dyn Observer<E>>>);
+        // fn register_observer_mut(&mut self, event: &dyn Observer<E>);
         fn notify_observers(&mut self, event: &E);
     }
 
