@@ -1,1 +1,1 @@
-A simple crate for the Observer pattern.  Uses traits to define an Oberser and an Observable.  The `Dipatcher` struct is a simple implementation using Weak pointers so we do not get into ownership issues.  The observerable does not own the observers.
+A simple crate for the Observer pattern.  Uses traits to define an Observer and an Observable.  The `Dipatcher` struct is a simple implementation using Weak pointers so we do not get into ownership issues.  The observerable does not own the observers.
