@@ -7,9 +7,14 @@ use tokio::sync::Mutex;
 
 /// Trait for an observable object that performs notifications asyncronously.
 pub trait ObservableAsync<E> {
+    fn register_observer_mut(
+        &mut self,
+        observer: Arc<Mutex<dyn ObserverAsyncMut<E>>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
     fn register_observer(
         &mut self,
-        event: Arc<Mutex<dyn ObserverAsync<E> + Send>>,
+        observer: Arc<dyn ObserverAsync<E>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 
     fn notify_observers<'a>(
@@ -20,26 +25,47 @@ pub trait ObservableAsync<E> {
         E: Send;
 }
 
+/// Trait for an observer that can be notified asyncronously.
 #[async_trait]
-pub trait ObserverAsync<E> {
-    async fn notify(&mut self, event: &E);
+pub trait ObserverAsyncMut<E>: Send + Sync {
+    async fn notify_mut(&mut self, event: &E);
 }
 
+/// Trait for an observer that can be notified asyncronously.
+#[async_trait]
+pub trait ObserverAsync<E>: Send + Sync {
+    async fn notify(&self, event: &E);
+}
+
+enum Mutability<E> {
+    Mutable(Weak<Mutex<dyn ObserverAsyncMut<E>>>),
+    Immutable(Weak<dyn ObserverAsync<E>>),
+}
 pub struct DispatcherAsync<E> {
-    observers: Mutex<Vec<Weak<Mutex<dyn ObserverAsync<E> + Send>>>>,
+    observers: Mutex<Vec<Mutability<E>>>,
 }
 
 impl<E> ObservableAsync<E> for DispatcherAsync<E>
 where
     E: Send + Sync,
 {
-    fn register_observer(
+    fn register_observer_mut(
         &mut self,
-        observer: Arc<Mutex<dyn ObserverAsync<E> + Send>>,
+        observer: Arc<Mutex<dyn ObserverAsyncMut<E>>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let mut lock = self.observers.lock().await;
-            lock.push(Arc::downgrade(&observer));
+            lock.push(Mutability::Mutable(Arc::downgrade(&observer)));
+        })
+    }
+
+    fn register_observer(
+        &mut self,
+        observer: Arc<dyn ObserverAsync<E>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let mut lock = self.observers.lock().await;
+            lock.push(Mutability::Immutable(Arc::downgrade(&observer)));
         })
     }
 
@@ -52,14 +78,27 @@ where
             let mut lock = self.observers.lock().await;
             // This removes any observers that have been dropped (fail to upgrade)
             lock.retain(|observer| {
-                if let Some(observer) = observer.upgrade() {
-                    // Don't handle the mutex here, as it will be dropped. Need to pass it into the future.
-                    let future = handle_notify(observer, event);
-                    futures.push(future);
+                match observer {
+                    Mutability::Mutable(observer) => {
+                        if let Some(ob) = observer.upgrade() {
+                            // Don't handle the mutex here, as it will be dropped. Need to pass it into the future.
+                            let future = handle_notify_mut(ob, event);
+                            futures.push(future);
 
-                    true
-                } else {
-                    false
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Mutability::Immutable(observer) => {
+                        if let Some(ob) = observer.upgrade() {
+                            futures.push(Box::pin(async move { ob.notify(event).await }));
+
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 }
             });
             futures::future::join_all(futures).await;
@@ -68,9 +107,17 @@ where
 }
 
 /// Used for moving the mutex into the future.
-async fn handle_notify<E>(observer: Arc<Mutex<dyn ObserverAsync<E> + Send>>, event: &E) {
-    let mut lock = (*observer).lock().await;
-    lock.notify(&event).await;
+fn handle_notify_mut<E>(
+    observer: Arc<Mutex<dyn ObserverAsyncMut<E>>>,
+    event: &E,
+) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
+where
+    E: Send + Sync,
+{
+    Box::pin(async move {
+        let mut lock = observer.lock().await;
+        lock.notify_mut(event).await;
+    })
 }
 
 impl<E> DispatcherAsync<E> {
@@ -88,12 +135,11 @@ impl<E> DispatcherAsync<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::test;
     struct Observer1(i32);
 
     #[async_trait]
-    impl ObserverAsync<i32> for Observer1 {
-        async fn notify(&mut self, event: &i32) {
+    impl ObserverAsyncMut<i32> for Observer1 {
+        async fn notify_mut(&mut self, event: &i32) {
             self.0 += event;
             println!("Observer1 call event: {}", event);
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -104,8 +150,8 @@ mod tests {
     struct Observer2(i32);
 
     #[async_trait]
-    impl ObserverAsync<i32> for Observer2 {
-        async fn notify(&mut self, event: &i32) {
+    impl ObserverAsyncMut<i32> for Observer2 {
+        async fn notify_mut(&mut self, event: &i32) {
             self.0 *= event;
             println!("Observer2 call event: {}", event);
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -119,8 +165,8 @@ mod tests {
         let observer1 = Arc::new(Mutex::new(Observer1(0)));
         let observer2 = Arc::new(Mutex::new(Observer2(1)));
 
-        dispatcher.register_observer(observer1.clone()).await;
-        dispatcher.register_observer(observer2.clone()).await;
+        dispatcher.register_observer_mut(observer1.clone()).await;
+        dispatcher.register_observer_mut(observer2.clone()).await;
 
         assert_eq!(dispatcher.num_oberservers().await, 2);
 
@@ -150,8 +196,8 @@ mod tests {
         let observer1 = Arc::new(Mutex::new(Observer1(0)));
         let observer2 = Arc::new(Mutex::new(Observer2(1)));
 
-        dispatcher.register_observer(observer1.clone()).await;
-        dispatcher.register_observer(observer2.clone()).await;
+        dispatcher.register_observer_mut(observer1.clone()).await;
+        dispatcher.register_observer_mut(observer2.clone()).await;
 
         assert_eq!(dispatcher.num_oberservers().await, 2);
 
@@ -176,8 +222,8 @@ mod tests {
         let observer1 = Arc::new(Mutex::new(Observer1(0)));
         let observer2 = Arc::new(Mutex::new(Observer2(3)));
 
-        dispatcher.register_observer(observer1.clone()).await;
-        dispatcher.register_observer(observer2.clone()).await;
+        dispatcher.register_observer_mut(observer1.clone()).await;
+        dispatcher.register_observer_mut(observer2.clone()).await;
 
         assert_eq!(dispatcher.num_oberservers().await, 2);
 
@@ -204,8 +250,8 @@ mod tests {
         let observer1 = Arc::new(Mutex::new(Observer1(0)));
         let observer2 = Arc::new(Mutex::new(Observer2(3)));
 
-        dispatcher.register_observer(observer1.clone()).await;
-        dispatcher.register_observer(observer2.clone()).await;
+        dispatcher.register_observer_mut(observer1.clone()).await;
+        dispatcher.register_observer_mut(observer2.clone()).await;
 
         assert_eq!(dispatcher.num_oberservers().await, 2);
 
