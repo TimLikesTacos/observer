@@ -29,8 +29,13 @@ mod sync {
     }
 
     pub trait Observable<E> {
+        /// Register an immuatble observer
         fn register_observer(&mut self, event: Rc<dyn Observer<E>>);
+
+        /// Register a mutable observer
         fn register_observer_mut(&mut self, event: Rc<RefCell<dyn ObserverMut<E>>>);
+
+        /// Notify all observers, both mutable and immutable
         fn notify_observers(&mut self, event: &E);
     }
 
@@ -63,7 +68,7 @@ mod sync {
                 Mutability::Mutable(observer) => {
                     if let Some(observer) = observer.upgrade() {
                         observer.borrow_mut().notify_mut(event);
-                        return true;
+                        true
                     } else {
                         false
                     }
@@ -71,7 +76,7 @@ mod sync {
                 Mutability::Immutable(observer) => {
                     if let Some(observer) = observer.upgrade() {
                         observer.notify(event);
-                        return true;
+                        true
                     } else {
                         false
                     }
@@ -87,6 +92,8 @@ mod sync {
             }
         }
 
+        /// This reflects the amount of active observers registered or still active from the last time notify_observers was called.
+        /// Inactive observers are removed from the list only when notify_observers is called.
         pub fn num_oberservers(&self) -> usize {
             self.observers.len()
         }
