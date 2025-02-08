@@ -86,6 +86,8 @@ mod sync {
     }
 
     impl<E> Dispatcher<E> {
+
+        /// Create a new dispatcher
         pub fn new() -> Self {
             Dispatcher {
                 observers: Vec::new(),

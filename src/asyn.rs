@@ -190,6 +190,7 @@ mod tests {
         assert_eq!(observer2.lock().await.0, 20);
     }
 
+    
     #[tokio::test]
     async fn test_dispatcher_bulk_notify() {
         let mut dispatcher = DispatcherAsync::new();
